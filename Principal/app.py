@@ -1,9 +1,12 @@
 import streamlit as st
-import streamlit as st
-from Principal import calc
-from Principal import database
 import pandas as pd
+
+# Importações relativas (mesmo pacote)
 from calc import calcular_lucro, calcular_markup, calcular_ponto_equilibrio
+import database
+
+# Inicializar banco de dados
+database.criar_tabela()
 
 st.set_page_config(page_title="Calculadora de Lucro", layout="centered")
 
@@ -19,39 +22,76 @@ if st.button("Calcular"):
     if preco_venda < preco_custo:
         st.error("O preço de venda deve ser maior ou igual ao preço de custo.")
     else:
-        # calcular_lucro retorna uma tupla (lucro, margem_de_lucro)
-        lucro, margem_lucro, lucro_liquido = calcular_lucro(preco_custo, preco_venda, imposto, custo_servico)
-        
-        # calcular_markup retorna o fator de markup
+        # Cálculos básicos (agora retorna 4 valores)
+        lucro, margem_bruta, lucro_liquido, margem_liquida = calcular_lucro(preco_custo, preco_venda, imposto, custo_servico)
         markup = calcular_markup(preco_custo, preco_venda)
-        
-        # calcular_ponto_equilibrio retorna o número de unidades
         ponto_equilibrio = calcular_ponto_equilibrio(preco_custo, preco_venda)
-database.inserir_calculo(preco_custo, preco_venda, custo_servico, imposto, lucro, margem_lucro, lucro_liquido, markup, ponto_equilibrio)
-        st.success(f"Lucro: R$ {lucro:.2f}")
-        st.success(f"Lucro Líquido: R$ {lucro_liquido:.2f}")
-       
         
-        if margem_lucro is not None:
-            st.success(f"Margem de Lucro: {margem_lucro:.2f}%")
-        else:
-            st.warning("Margem de lucro não pode ser calculada (preço de custo zero)")
+        # Salvar no banco de dados
+        database.salvar_registro(
+            preco_custo, 
+            preco_venda, 
+            lucro, 
+            margem_bruta if margem_bruta is not None else 0.0,
+            custo_servico, 
+            imposto, 
+            lucro_liquido
+        )
         
+        # Exibir resultados principais
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.metric("💰 Lucro Bruto", f"R$ {lucro:.2f}")
+            st.metric("💵 Lucro Líquido", f"R$ {lucro_liquido:.2f}", 
+                     delta=f"{lucro_liquido - lucro:.2f}" if lucro != lucro_liquido else None)
+        
+        with col2:
+            if margem_bruta is not None:
+                st.metric("📊 Margem Bruta", f"{margem_bruta:.2f}%", 
+                         help="Lucro bruto sobre o custo")
+            
+            if margem_liquida is not None:
+                # Indicador visual de margem saudável
+                cor = "🟢" if margem_liquida >= 20 else "🟡" if margem_liquida >= 10 else "🔴"
+                st.metric(f"{cor} Margem Líquida", f"{margem_liquida:.2f}%",
+                         help="Lucro líquido sobre a venda (mais preciso para tomada de decisão)")
+        
+        st.divider()
+        
+        # Métricas adicionais
         if markup is not None:
-            st.success(f"Markup (fator): {markup:.2f}x")
+            st.info(f"🔢 Markup (fator): **{markup:.2f}x** - Você multiplica o custo por {markup:.2f} para chegar ao preço de venda")
         else:
             st.warning("Markup não pode ser calculado (preço de custo zero)")
         
         if ponto_equilibrio is not None:
-            st.info(f"Ponto de Equilíbrio: {ponto_equilibrio:.2f} unidades")
+            st.info(f"⚖️ Ponto de Equilíbrio: **{ponto_equilibrio:.0f} unidades** - Você precisa vender {ponto_equilibrio:.0f} unidades para cobrir os custos")
         else:
-            st.warning("Ponto de equilíbrio não pode ser calculado (lucro unitário zero)")
-            st.subheader("Histórico de Cálculos")
-        historico = database.obter_historico_calculos(limite=5)
-        if historico:
-            df_historico = pd.DataFrame(historico, columns=[
-                "ID", "Data", "Preço de Custo", "Preço de Venda", "Custo de Serviço",
-                "Imposto (%)", "Lucro", "Margem de Lucro (%)", "Lucro Líquido",
-                "Markup (fator)", "Ponto de Equilíbrio (unidades)"
-            ])
-            st.dataframe(df_historico)
+            st.warning("Ponto de equilíbrio não pode ser calculado (lucro unitário zero ou negativo)")
+
+# Exibir histórico
+st.divider()
+st.subheader("Histórico de Cálculos (Últimos 10 registros)")
+historico = database.obter_historico()
+
+if historico:
+    # Inverter para mostrar os mais recentes primeiro
+    historico_recente = historico[-10:][::-1]
+    
+    df_historico = pd.DataFrame(historico_recente, columns=[
+        "ID", "Data", "Preço de Custo", "Preço de Venda", "Lucro Bruto", 
+        "Margem de Lucro (%)", "Custo de Serviço", "Imposto (%)", "Lucro Líquido"
+    ])
+    
+    # Formatar valores monetários
+    colunas_moeda = ["Preço de Custo", "Preço de Venda", "Lucro Bruto", "Custo de Serviço", "Lucro Líquido"]
+    for col in colunas_moeda:
+        df_historico[col] = df_historico[col].apply(lambda x: f"R$ {x:.2f}")
+    
+    df_historico["Margem de Lucro (%)"] = df_historico["Margem de Lucro (%)"].apply(lambda x: f"{x:.2f}%")
+    df_historico["Imposto (%)"] = df_historico["Imposto (%)"].apply(lambda x: f"{x:.2f}%")
+    
+    st.dataframe(df_historico, use_container_width=True)
+else:
+    st.info("Nenhum cálculo realizado ainda.")
